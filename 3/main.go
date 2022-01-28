@@ -24,12 +24,9 @@ func CheckError(e error) {
 	}
 }
 
+// Функция поиска простых чисел.
+// В качестве алгоритма взято Решето Эратосфена.
 func FindPrimeNumbers(c chan<- int, begin, end int) {
-	/*
-		Функция поиска простых чисел.
-		В качестве алгоритма взято Решето Эратосфена.
-	*/
-
 	nums := make([]bool, end+1)
 
 	for i := 2; i <= end; i++ {
@@ -44,11 +41,8 @@ func FindPrimeNumbers(c chan<- int, begin, end int) {
 	}
 }
 
+// Функция записи данных в файл.
 func WriteToFile(c <-chan int, name string) {
-	/*
-		Функция записи данных в файл.
-	*/
-
 	file, err := os.Create(name)
 	CheckError(err)
 	defer file.Close()
