@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,9 +28,10 @@ func CheckError(e error) {
 
 // Функция поиска простых чисел.
 // В качестве алгоритма взято Решето Эратосфена.
-func FindPrimeNumbers(c chan<- int, begin, end int) {
-	nums := make([]bool, end+1)
+func FindPrimeNumbers(c chan<- int, wg *sync.WaitGroup, begin, end int) {
+	defer wg.Done()
 
+	nums := make([]bool, end+1)
 	for i := 2; i <= end; i++ {
 		if !nums[i] {
 			if i >= begin {
@@ -42,26 +45,43 @@ func FindPrimeNumbers(c chan<- int, begin, end int) {
 }
 
 // Функция записи данных в файл.
-func WriteToFile(c <-chan int, name string) {
+func WriteToFile(ctx context.Context, c <-chan int, programEndingMsg chan<- string, wg *sync.WaitGroup, name string) {
 	file, err := os.Create(name)
 	CheckError(err)
 	defer file.Close()
 
+	// Канал, из которого можно считать данные только тогда, когда работа всех горутин, вычисляющих простые числа, завершена
+	allWritersClosed := make(chan struct{})
+	go func() {
+		defer close(allWritersClosed)
+		wg.Wait()
+	}()
+
+LOOP:
 	for {
-		file.WriteString(strconv.Itoa(<-c) + " ")
+		select {
+		case <-ctx.Done():
+			programEndingMsg <- "The program ended by timeout"
+			break LOOP
+		case primeDigit := <-c:
+			file.WriteString(strconv.Itoa(primeDigit) + " ")
+		case <-allWritersClosed:
+			programEndingMsg <- "The program ended because writing to the file is finished"
+			break LOOP
+		}
 	}
 }
 
 func main() {
 	timeout := flag.Int("timeout", 10, "Timeout")
-	file_name := flag.String("file", "file.txt", "File's name")
+	fileName := flag.String("file", "file.txt", "File's name")
 	ranges := make([]Range, 0)
 
 	flag.Func("range", "Range of prime numbers", func(s string) error {
-		str_arr_ranges := strings.Split(s, ":")
-		begin, err := strconv.Atoi(str_arr_ranges[0])
+		strArrRanges := strings.Split(s, ":")
+		begin, err := strconv.Atoi(strArrRanges[0])
 		CheckError(err)
-		end, err := strconv.Atoi(str_arr_ranges[1])
+		end, err := strconv.Atoi(strArrRanges[1])
 		CheckError(err)
 
 		ranges = append(ranges, Range{
@@ -77,19 +97,22 @@ func main() {
 	// Канал, по которому передаются, а затем считываются простые числа.
 	c := make(chan int)
 	defer close(c)
-	// Таймер продолжительностью timeout секунд
-	timer := time.NewTimer(time.Duration(*timeout) * time.Second)
-
-	go WriteToFile(c, *file_name)
+	// Канал, в который записывается причина завершения программы
+	programEndingMsg := make(chan string)
+	defer close(programEndingMsg)
+	wg := &sync.WaitGroup{}
+	// Контекст, завершающийся по таймауту
+	ctx, _ := context.WithTimeout(context.Background(), time.Duration(*timeout)*time.Second)
 
 	for _, val := range ranges {
-		go FindPrimeNumbers(c, val.begin, val.end)
+		wg.Add(1)
+		go FindPrimeNumbers(c, wg, val.begin, val.end)
 	}
 
+	go WriteToFile(ctx, c, programEndingMsg, wg, *fileName)
+
 	select {
-	case <-timer.C:
-		// Когда таймер завершается, он записывает в свой канал текущее время.
-		// Таким образом, после получения данных из канала таймера программа завершает свою работу.
-		fmt.Println("The program has completed")
+	case msg := <-programEndingMsg:
+		fmt.Println(msg)
 	}
 }
